@@ -13,11 +13,7 @@ using FASTECH;
 namespace EzIIOLib
 {
     #region Configuration Classes
-    public class IOConfiguration
-    {
-        public Metadata Metadata { get; set; }
-        public EziioDevice[] Eziio { get; set; }
-    }
+
 
     public class Metadata
     {
