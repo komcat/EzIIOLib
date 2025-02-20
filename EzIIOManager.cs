@@ -2,24 +2,106 @@
 using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Collections.Generic;
-using FASTECH;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.IO;
+using System.Linq;
+using System.Collections.Generic;
+using Newtonsoft.Json;
+using FASTECH;
 
 namespace EzIIOLib
 {
-    public enum EzIIODeviceType
+    #region Configuration Classes
+    public class IOConfiguration
     {
-        I16O16,  // 16 inputs, 16 outputs
-        I8O8     // 8 inputs, 8 outputs
+        public Metadata Metadata { get; set; }
+        public EziioDevice[] Eziio { get; set; }
     }
+
+    public class Metadata
+    {
+        public string Version { get; set; }
+        public DateTime LastUpdated { get; set; }
+    }
+
+    public class EziioDevice
+    {
+        public int DeviceId { get; set; }
+        public string Name { get; set; }
+        public string IP { get; set; }
+        public int InputCount { get; set; }
+        public int OutputCount { get; set; }
+        public IOConfig IOConfig { get; set; }
+    }
+
+    public class IOConfig
+    {
+        public List<PinConfig> Outputs { get; set; } = new List<PinConfig>();
+        public List<PinConfig> Inputs { get; set; } = new List<PinConfig>();
+    }
+
+    public class PinConfig
+    {
+        public int Pin { get; set; }
+        public string Name { get; set; }
+    }
+
+    public class PinStatus : INotifyPropertyChanged
+    {
+        private int pinNumber;
+        private string name;
+        private bool state;
+
+        public int PinNumber
+        {
+            get => pinNumber;
+            set
+            {
+                pinNumber = value;
+                OnPropertyChanged(nameof(PinNumber));
+            }
+        }
+
+        public string Name
+        {
+            get => name;
+            set
+            {
+                name = value;
+                OnPropertyChanged(nameof(Name));
+                OnPropertyChanged(nameof(DisplayName));
+            }
+        }
+
+        public bool State
+        {
+            get => state;
+            set
+            {
+                state = value;
+                OnPropertyChanged(nameof(State));
+            }
+        }
+
+        public string DisplayName => string.IsNullOrEmpty(Name) ? $"Pin {PinNumber}" : Name;
+
+        public event PropertyChangedEventHandler PropertyChanged;
+
+        protected void OnPropertyChanged(string propertyName)
+        {
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+        }
+    }
+    #endregion
 
     public class EzIIOManager : IDisposable
     {
+        #region Constants and Static Fields
         private const int TCP = 0;
+        private const int UDP = 1;
 
-        private static readonly uint[] OUTPUT_PIN_MASKS_I16O16 = new uint[16]
+        private static readonly uint[] OUTPUT_PIN_MASKS_16 = new uint[16]
         {
             0x10000,    // Pin 0
             0x20000,    // Pin 1
@@ -39,7 +121,7 @@ namespace EzIIOLib
             0x80000000  // Pin 15
         };
 
-        private static readonly uint[] OUTPUT_PIN_MASKS_I8O8 = new uint[8]
+        private static readonly uint[] OUTPUT_PIN_MASKS_8 = new uint[8]
         {
             0x100,     // Pin 0
             0x200,     // Pin 1
@@ -50,9 +132,10 @@ namespace EzIIOLib
             0x4000,    // Pin 6
             0x8000     // Pin 7
         };
+        #endregion
 
+        #region Private Fields
         private readonly int boardId;
-        private readonly EzIIODeviceType deviceType;
         private bool isConnected;
         private bool isMonitoring;
         private Thread monitorThread;
@@ -60,113 +143,89 @@ namespace EzIIOLib
         private readonly int inputPinCount;
         private readonly int outputPinCount;
         private readonly uint[] currentOutputMasks;
+        private readonly EziioDevice deviceConfig;
+        #endregion
 
-        // Add dictionaries for pin name mapping
-        private readonly Dictionary<string, int> inputPinNameToNumber;
-        private readonly Dictionary<string, int> outputPinNameToNumber;
-        private readonly Dictionary<int, string> inputPinNumberToName;
-        private readonly Dictionary<int, string> outputPinNumberToName;
-
+        #region Public Properties
         public ObservableCollection<PinStatus> InputPins { get; private set; }
         public ObservableCollection<PinStatus> OutputPins { get; private set; }
+        public bool IsConnected => isConnected;
+        public string DeviceName => deviceConfig?.Name ?? "Unknown Device";
+        public string IPAddress => deviceConfig?.IP ?? "Unknown IP";
+        #endregion
 
+        #region Events
         public event EventHandler<bool> ConnectionStatusChanged;
         public event EventHandler<string> Error;
-        public event EventHandler<(string Name, bool State)> InputStateChanged;
-        public event EventHandler<(string Name, bool State)> OutputStateChanged;
+        public event EventHandler<(string PinName, bool State)> InputStateChanged;
+        public event EventHandler<(string PinName, bool State)> OutputStateChanged;
+        #endregion
 
-        public bool IsConnected => isConnected;
-        public EzIIODeviceType DeviceType => deviceType;
-
-        public EzIIOManager(EzIIODeviceType deviceType = EzIIODeviceType.I16O16, int boardId = 0)
+        #region Static Methods
+        public static EzIIOManager CreateFromConfig(string deviceName, string configPath = null)
         {
-            this.boardId = boardId;
-            this.deviceType = deviceType;
+            var config = LoadDeviceConfiguration(deviceName, configPath);
+            if (config == null)
+                throw new ArgumentException($"Device '{deviceName}' not found in configuration.");
 
-            // Initialize pin name mappings
-            inputPinNameToNumber = new Dictionary<string, int>();
-            outputPinNameToNumber = new Dictionary<string, int>();
-            inputPinNumberToName = new Dictionary<int, string>();
-            outputPinNumberToName = new Dictionary<int, string>();
+            return new EzIIOManager(config);
+        }
 
-            // Set pin counts based on device type
-            switch (deviceType)
+        private static EziioDevice LoadDeviceConfiguration(string deviceName, string configPath = null)
+        {
+            try
             {
-                case EzIIODeviceType.I8O8:
-                    inputPinCount = 8;
-                    outputPinCount = 8;
-                    currentOutputMasks = OUTPUT_PIN_MASKS_I8O8;
-                    break;
-                case EzIIODeviceType.I16O16:
-                default:
-                    inputPinCount = 16;
-                    outputPinCount = 16;
-                    currentOutputMasks = OUTPUT_PIN_MASKS_I16O16;
-                    break;
+                configPath ??= Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Config", "IOConfig.json");
+                string jsonContent = File.ReadAllText(configPath);
+                var config = JsonConvert.DeserializeObject<IOConfiguration>(jsonContent);
+                return config.Eziio.FirstOrDefault(d => d.Name == deviceName);
             }
+            catch (Exception ex)
+            {
+                throw new Exception($"Error loading configuration: {ex.Message}");
+            }
+        }
+        #endregion
+
+        #region Constructors
+        private EzIIOManager(EziioDevice config)
+        {
+            deviceConfig = config ?? throw new ArgumentNullException(nameof(config));
+
+            boardId = config.DeviceId;
+            inputPinCount = config.InputCount;
+            outputPinCount = config.OutputCount;
+
+            currentOutputMasks = outputPinCount <= 8 ? OUTPUT_PIN_MASKS_8 : OUTPUT_PIN_MASKS_16;
 
             InitializePinCollections();
             cancellationTokenSource = new CancellationTokenSource();
         }
+        #endregion
 
-        // Add method to configure pin names
-        public void ConfigurePinNames(Dictionary<string, int> inputPins, Dictionary<string, int> outputPins)
-        {
-            // Clear existing mappings
-            inputPinNameToNumber.Clear();
-            outputPinNameToNumber.Clear();
-            inputPinNumberToName.Clear();
-            outputPinNumberToName.Clear();
-
-            // Configure input pins
-            foreach (var pin in inputPins)
-            {
-                if (pin.Value >= 0 && pin.Value < inputPinCount)
-                {
-                    inputPinNameToNumber[pin.Key] = pin.Value;
-                    inputPinNumberToName[pin.Value] = pin.Key;
-                    InputPins[pin.Value].Name = pin.Key;
-                }
-            }
-
-            // Configure output pins
-            foreach (var pin in outputPins)
-            {
-                if (pin.Value >= 0 && pin.Value < outputPinCount)
-                {
-                    outputPinNameToNumber[pin.Key] = pin.Value;
-                    outputPinNumberToName[pin.Value] = pin.Key;
-                    OutputPins[pin.Value].Name = pin.Key;
-                }
-            }
-        }
-
-        private void InitializePinCollections()
-        {
-            InputPins = new ObservableCollection<PinStatus>();
-            OutputPins = new ObservableCollection<PinStatus>();
-
-            for (int i = 0; i < inputPinCount; i++)
-            {
-                InputPins.Add(new PinStatus { PinNumber = i, Name = $"Input{i}", State = false });
-            }
-
-            for (int i = 0; i < outputPinCount; i++)
-            {
-                OutputPins.Add(new PinStatus { PinNumber = i, Name = $"Output{i}", State = false });
-            }
-        }
-
-        public bool Connect(string ipAddress)
+        #region Public Methods
+        public bool Connect()
         {
             try
             {
-                if (!IPAddress.TryParse(ipAddress, out IPAddress ip))
+                string[] ipParts = deviceConfig.IP.Split('.');
+                if (ipParts.Length != 4)
                 {
                     RaiseError("Invalid IP Address format");
                     return false;
                 }
 
+                byte[] ipBytes = new byte[4];
+                for (int i = 0; i < 4; i++)
+                {
+                    if (!byte.TryParse(ipParts[i], out ipBytes[i]))
+                    {
+                        RaiseError("Invalid IP Address format");
+                        return false;
+                    }
+                }
+
+                IPAddress ip = new IPAddress(ipBytes);
                 if (EziMOTIONPlusELib.FAS_ConnectTCP(ip, boardId))
                 {
                     isConnected = true;
@@ -174,11 +233,9 @@ namespace EzIIOLib
                     ConnectionStatusChanged?.Invoke(this, true);
                     return true;
                 }
-                else
-                {
-                    RaiseError("Connection failed");
-                    return false;
-                }
+
+                RaiseError("Connection failed");
+                return false;
             }
             catch (Exception ex)
             {
@@ -198,29 +255,26 @@ namespace EzIIOLib
             }
         }
 
-        // New method to set output by pin name
-        public bool SetOutputByName(string pinName, bool state)
+        public bool SetOutput(string pinName)
         {
-            if (!isConnected || !outputPinNameToNumber.ContainsKey(pinName))
+            return SetOutput(pinName, true);
+        }
+
+        public bool ClearOutput(string pinName)
+        {
+            return SetOutput(pinName, false);
+        }
+
+        public bool SetOutput(string pinName, bool state)
+        {
+            var pinConfig = deviceConfig.IOConfig.Outputs.FirstOrDefault(p => p.Name == pinName);
+            if (pinConfig == null)
             {
-                RaiseError($"Invalid pin name or not connected: {pinName}");
+                RaiseError($"Output pin '{pinName}' not found in configuration");
                 return false;
             }
 
-            int pinNumber = outputPinNameToNumber[pinName];
-            return SetOutputPin(pinNumber, state);
-        }
-
-        // New method to set output
-        public bool SetOutput(string pinName)
-        {
-            return SetOutputByName(pinName, true);
-        }
-
-        // New method to clear output
-        public bool ClearOutput(string pinName)
-        {
-            return SetOutputByName(pinName, false);
+            return SetOutputPin(pinConfig.Pin, state);
         }
 
         public bool SetOutputPin(int pinNumber, bool state)
@@ -234,24 +288,55 @@ namespace EzIIOLib
             return EziMOTIONPlusELib.FAS_SetOutput(boardId, setMask, clearMask) == EziMOTIONPlusELib.FMM_OK;
         }
 
-        // New method to get input state by name
         public bool? GetInputState(string pinName)
         {
-            if (!inputPinNameToNumber.ContainsKey(pinName))
-                return null;
-
-            int pinNumber = inputPinNameToNumber[pinName];
-            return InputPins[pinNumber].State;
+            var pin = InputPins.FirstOrDefault(p => p.Name == pinName);
+            return pin?.State;
         }
 
-        // New method to get output state by name
         public bool? GetOutputState(string pinName)
         {
-            if (!outputPinNameToNumber.ContainsKey(pinName))
-                return null;
+            var pin = OutputPins.FirstOrDefault(p => p.Name == pinName);
+            return pin?.State;
+        }
 
-            int pinNumber = outputPinNameToNumber[pinName];
-            return OutputPins[pinNumber].State;
+        public void Dispose()
+        {
+            cancellationTokenSource.Cancel();
+            Disconnect();
+            cancellationTokenSource.Dispose();
+        }
+        #endregion
+
+        #region Private Methods
+        private void InitializePinCollections()
+        {
+            InputPins = new ObservableCollection<PinStatus>();
+            OutputPins = new ObservableCollection<PinStatus>();
+
+            // Initialize input pins
+            for (int i = 0; i < inputPinCount; i++)
+            {
+                var pinConfig = deviceConfig.IOConfig.Inputs?.FirstOrDefault(p => p.Pin == i);
+                InputPins.Add(new PinStatus
+                {
+                    PinNumber = i,
+                    Name = pinConfig?.Name ?? string.Empty,
+                    State = false
+                });
+            }
+
+            // Initialize output pins
+            for (int i = 0; i < outputPinCount; i++)
+            {
+                var pinConfig = deviceConfig.IOConfig.Outputs?.FirstOrDefault(p => p.Pin == i);
+                OutputPins.Add(new PinStatus
+                {
+                    PinNumber = i,
+                    Name = pinConfig?.Name ?? string.Empty,
+                    State = false
+                });
+            }
         }
 
         private void StartMonitoring()
@@ -267,6 +352,7 @@ namespace EzIIOLib
         private void StopMonitoring()
         {
             isMonitoring = false;
+            cancellationTokenSource.Cancel();
             monitorThread?.Join(1000);
         }
 
@@ -311,9 +397,9 @@ namespace EzIIOLib
                 if (InputPins[i].State != newState)
                 {
                     InputPins[i].State = newState;
-                    if (inputPinNumberToName.ContainsKey(i))
+                    if (!string.IsNullOrEmpty(InputPins[i].Name))
                     {
-                        InputStateChanged?.Invoke(this, (inputPinNumberToName[i], newState));
+                        InputStateChanged?.Invoke(this, (InputPins[i].Name, newState));
                     }
                 }
             }
@@ -327,9 +413,9 @@ namespace EzIIOLib
                 if (OutputPins[i].State != newState)
                 {
                     OutputPins[i].State = newState;
-                    if (outputPinNumberToName.ContainsKey(i))
+                    if (!string.IsNullOrEmpty(OutputPins[i].Name))
                     {
-                        OutputStateChanged?.Invoke(this, (outputPinNumberToName[i], newState));
+                        OutputStateChanged?.Invoke(this, (OutputPins[i].Name, newState));
                     }
                 }
             }
@@ -339,56 +425,6 @@ namespace EzIIOLib
         {
             Error?.Invoke(this, message);
         }
-
-        public void Dispose()
-        {
-            cancellationTokenSource.Cancel();
-            Disconnect();
-            cancellationTokenSource.Dispose();
-        }
-    }
-
-    public class PinStatus : INotifyPropertyChanged
-    {
-        private int pinNumber;
-        private string name;
-        private bool state;
-
-        public int PinNumber
-        {
-            get => pinNumber;
-            set
-            {
-                pinNumber = value;
-                OnPropertyChanged(nameof(PinNumber));
-            }
-        }
-
-        public string Name
-        {
-            get => name;
-            set
-            {
-                name = value;
-                OnPropertyChanged(nameof(Name));
-            }
-        }
-
-        public bool State
-        {
-            get => state;
-            set
-            {
-                state = value;
-                OnPropertyChanged(nameof(State));
-            }
-        }
-
-        public event PropertyChangedEventHandler PropertyChanged;
-
-        protected void OnPropertyChanged(string propertyName)
-        {
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
-        }
+        #endregion
     }
 }
