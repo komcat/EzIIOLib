@@ -49,8 +49,7 @@ namespace EzIIOLib
 
     public class PneumaticSlide : IDisposable
     {
-        private readonly EzIIOManager outputDevice;
-        private readonly EzIIOManager inputDevice;
+        private readonly MultiDeviceManager deviceManager;
         private readonly PneumaticSlideConfig config;
         private SlidePosition currentPosition = SlidePosition.Unknown;
         private TaskCompletionSource<bool> movementCompletion;
@@ -65,31 +64,25 @@ namespace EzIIOLib
         public SlidePosition Position => currentPosition;
         public bool IsMoving => isMoving;
 
-        public PneumaticSlide(PneumaticSlideConfig config)
+        public PneumaticSlide(MultiDeviceManager deviceManager, PneumaticSlideConfig config)
         {
+            this.deviceManager = deviceManager ?? throw new ArgumentNullException(nameof(deviceManager));
             this.config = config ?? throw new ArgumentNullException(nameof(config));
 
-            // Create IO device managers
-            outputDevice = EzIIOManager.CreateFromConfig(config.Output.DeviceName);
+            // Subscribe to input state changes for both devices
+            var outputDevice = deviceManager.GetDevice(config.Output.DeviceName);
+            var inputDevice = deviceManager.GetDevice(config.ExtendedInput.DeviceName);
 
-            // Check if inputs are on the same device as outputs
-            if (config.ExtendedInput.DeviceName == config.Output.DeviceName)
-                inputDevice = outputDevice;
-            else
-                inputDevice = EzIIOManager.CreateFromConfig(config.ExtendedInput.DeviceName);
-
-            // Subscribe to input state changes
+            // Add event subscription for input state changes
             inputDevice.InputStateChanged += OnInputStateChanged;
-
-            // Connect devices
-            if (!outputDevice.Connect())
-                throw new Exception($"Failed to connect to output device {config.Output.DeviceName}");
-
-            if (inputDevice != outputDevice && !inputDevice.Connect())
-                throw new Exception($"Failed to connect to input device {config.ExtendedInput.DeviceName}");
 
             // Initialize position based on current sensor states
             UpdatePosition();
+        }
+
+        private bool GetInputState(string deviceName, string pinName)
+        {
+            return deviceManager.GetInputState(deviceName, pinName) ?? false;
         }
 
         public async Task<bool> ExtendAsync()
@@ -118,8 +111,8 @@ namespace EzIIOLib
         {
             return new SensorState
             {
-                ExtendedSensor = inputDevice.GetInputState(config.ExtendedInput.PinName) ?? false,
-                RetractedSensor = inputDevice.GetInputState(config.RetractedInput.PinName) ?? false
+                ExtendedSensor = GetInputState(config.ExtendedInput.DeviceName, config.ExtendedInput.PinName),
+                RetractedSensor = GetInputState(config.RetractedInput.DeviceName, config.RetractedInput.PinName)
             };
         }
 
@@ -144,9 +137,9 @@ namespace EzIIOLib
 
                 // Set output to desired state
                 if (extend)
-                    outputDevice.SetOutput(config.Output.PinName);
+                    deviceManager.SetOutput(config.Output.DeviceName, config.Output.PinName);
                 else
-                    outputDevice.ClearOutput(config.Output.PinName);
+                    deviceManager.ClearOutput(config.Output.DeviceName, config.Output.PinName);
 
                 // Wait for movement to complete or timeout
                 using (var cts = new System.Threading.CancellationTokenSource(config.TimeoutMs))
@@ -191,16 +184,16 @@ namespace EzIIOLib
 
         private void UpdatePosition()
         {
-            var extendedState = inputDevice.GetInputState(config.ExtendedInput.PinName);
-            var retractedState = inputDevice.GetInputState(config.RetractedInput.PinName);
+            var extendedState = GetInputState(config.ExtendedInput.DeviceName, config.ExtendedInput.PinName);
+            var retractedState = GetInputState(config.RetractedInput.DeviceName, config.RetractedInput.PinName);
 
             SlidePosition newPosition;
 
-            if (extendedState == true && retractedState == false)
+            if (extendedState && !retractedState)
                 newPosition = SlidePosition.Extended;
-            else if (extendedState == false && retractedState == true)
+            else if (!extendedState && retractedState)
                 newPosition = SlidePosition.Retracted;
-            else if (extendedState == false && retractedState == false)
+            else if (!extendedState && !retractedState)
                 newPosition = SlidePosition.Moving;
             else
                 newPosition = SlidePosition.Unknown; // Both sensors active - error condition
@@ -225,11 +218,6 @@ namespace EzIIOLib
             {
                 isDisposed = true;
                 movementCompletion?.TrySetCanceled();
-
-                if (inputDevice != outputDevice)
-                    inputDevice?.Dispose();
-
-                outputDevice?.Dispose();
             }
         }
     }
