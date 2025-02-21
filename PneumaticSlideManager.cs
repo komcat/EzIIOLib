@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
@@ -38,9 +39,24 @@ namespace EzIIOLib
 
         public PneumaticSlide GetSlide(string name)
         {
+            System.Diagnostics.Debug.WriteLine($"[PneumaticSlideManager] Attempting to get slide: '{name}'");
+            System.Diagnostics.Debug.WriteLine($"[PneumaticSlideManager] Current slides in dictionary: {slides.Count}");
+
+            // Log all available slide names
+            System.Diagnostics.Debug.WriteLine("[PneumaticSlideManager] Available slides:");
+            foreach (var slideName in slides.Keys)
+            {
+                System.Diagnostics.Debug.WriteLine($"  - '{slideName}'");
+            }
+
             if (slides.TryGetValue(name, out var slide))
+            {
+                System.Diagnostics.Debug.WriteLine($"[PneumaticSlideManager] Found slide: '{name}'");
                 return slide;
-            throw new ArgumentException($"Slide {name} not found");
+            }
+
+            System.Diagnostics.Debug.WriteLine($"[PneumaticSlideManager] ERROR: Slide '{name}' not found!");
+            throw new ArgumentException($"Slide '{name}' not found. Available slides: {string.Join(", ", slides.Keys)}");
         }
 
         public void Dispose()

@@ -43,7 +43,15 @@ namespace EzIIOLib
                 manager.Disconnect();
             }
         }
+        public bool AreAllDevicesConnected()
+        {
+            // If no devices are registered, return false
+            if (!deviceManagers.Any())
+                return false;
 
+            // Check if all devices are connected
+            return deviceManagers.Values.All(manager => manager.IsConnected);
+        }
         /// <summary>
         /// Get the input state of a specific pin on a specific device
         /// </summary>
@@ -135,6 +143,61 @@ namespace EzIIOLib
             return device.OutputPins;
         }
 
+        /// <summary>
+        /// Set (turn on) an output pin using just the pin name. 
+        /// Assumes pin names are unique across all devices.
+        /// </summary>
+        /// <param name="pinName">Name of the output pin</param>
+        /// <returns>True if successful, false otherwise</returns>
+        public bool SetOutput(string pinName)
+        {
+            foreach (var deviceManager in deviceManagers.Values)
+            {
+                var pin = deviceManager.OutputPins.FirstOrDefault(p => p.Name == pinName);
+                if (pin != null)
+                {
+                    return deviceManager.SetOutput(pinName);
+                }
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Clear (turn off) an output pin using just the pin name.
+        /// Assumes pin names are unique across all devices.
+        /// </summary>
+        /// <param name="pinName">Name of the output pin</param>
+        /// <returns>True if successful, false otherwise</returns>
+        public bool ClearOutput(string pinName)
+        {
+            foreach (var deviceManager in deviceManagers.Values)
+            {
+                var pin = deviceManager.OutputPins.FirstOrDefault(p => p.Name == pinName);
+                if (pin != null)
+                {
+                    return deviceManager.ClearOutput(pinName);
+                }
+            }
+            return false;
+        }
+        /// <summary>
+        /// Get the state of an input pin using just the pin name.
+        /// Assumes pin names are unique across all devices.
+        /// </summary>
+        /// <param name="pinName">Name of the input pin</param>
+        /// <returns>Boolean state of the pin, or null if pin not found</returns>
+        public bool? GetInputState(string pinName)
+        {
+            foreach (var deviceManager in deviceManagers.Values)
+            {
+                var pin = deviceManager.InputPins.FirstOrDefault(p => p.Name == pinName);
+                if (pin != null)
+                {
+                    return deviceManager.GetInputState(pinName);
+                }
+            }
+            return null;
+        }
         public void Dispose()
         {
             foreach (var manager in deviceManagers.Values)
