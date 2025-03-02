@@ -43,6 +43,69 @@ namespace EzIIOLib
                 manager.Disconnect();
             }
         }
+
+        // Add these methods to the MultiDeviceManager class in MultiDeviceManager.cs
+
+        /// <summary>
+        /// Gets the current state of an input pin on a specific device
+        /// </summary>
+        /// <param name="deviceName">Name of the device</param>
+        /// <param name="pinName">Name of the input pin</param>
+        /// <returns>True if the pin is active, false otherwise</returns>
+        public bool GetInput(string deviceName, string pinName)
+        {
+            var device = GetDevice(deviceName);
+            return device.GetInput(pinName);
+        }
+
+        /// <summary>
+        /// Gets the current state of an output pin on a specific device
+        /// </summary>
+        /// <param name="deviceName">Name of the device</param>
+        /// <param name="pinName">Name of the output pin</param>
+        /// <returns>True if the pin is active, false otherwise</returns>
+        public bool GetOutput(string deviceName, string pinName)
+        {
+            var device = GetDevice(deviceName);
+            return device.GetOutput(pinName);
+        }
+
+        /// <summary>
+        /// Finds and gets the state of an input pin by name across all devices
+        /// </summary>
+        /// <param name="pinName">Name of the input pin</param>
+        /// <returns>True if the pin is active, false if inactive or not found</returns>
+        public bool GetInput(string pinName)
+        {
+            foreach (var deviceManager in deviceManagers.Values)
+            {
+                var pin = deviceManager.InputPins.FirstOrDefault(p => p.Name == pinName);
+                if (pin != null)
+                {
+                    return deviceManager.GetInput(pinName);
+                }
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Finds and gets the state of an output pin by name across all devices
+        /// </summary>
+        /// <param name="pinName">Name of the output pin</param>
+        /// <returns>True if the pin is active, false if inactive or not found</returns>
+        public bool GetOutput(string pinName)
+        {
+            foreach (var deviceManager in deviceManagers.Values)
+            {
+                var pin = deviceManager.OutputPins.FirstOrDefault(p => p.Name == pinName);
+                if (pin != null)
+                {
+                    return deviceManager.GetOutput(pinName);
+                }
+            }
+            return false;
+        }
+
         public bool AreAllDevicesConnected()
         {
             // If no devices are registered, return false

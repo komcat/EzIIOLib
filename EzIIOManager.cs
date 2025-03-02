@@ -296,6 +296,74 @@ namespace EzIIOLib
             return pin?.State;
         }
 
+        // Add this method to the EzIIOManager class in EzIIOManager.cs
+
+        /// <summary>
+        /// Gets the current state of an input pin by name
+        /// </summary>
+        /// <param name="pinName">The name of the input pin</param>
+        /// <returns>True if the pin is active, false otherwise</returns>
+        public bool GetInput(string pinName)
+        {
+            var pin = InputPins.FirstOrDefault(p => p.Name == pinName);
+            if (pin == null)
+            {
+                RaiseError($"Input pin '{pinName}' not found");
+                return false;
+            }
+
+            return pin.State;
+        }
+
+        /// <summary>
+        /// Gets the current state of an input pin by pin number
+        /// </summary>
+        /// <param name="pinNumber">The number of the input pin</param>
+        /// <returns>True if the pin is active, false otherwise</returns>
+        public bool GetInput(int pinNumber)
+        {
+            if (pinNumber < 0 || pinNumber >= InputPins.Count)
+            {
+                RaiseError($"Input pin number {pinNumber} is out of range");
+                return false;
+            }
+
+            return InputPins[pinNumber].State;
+        }
+
+        /// <summary>
+        /// Gets the current state of an output pin by name
+        /// </summary>
+        /// <param name="pinName">The name of the output pin</param>
+        /// <returns>True if the pin is active, false otherwise</returns>
+        public bool GetOutput(string pinName)
+        {
+            var pin = OutputPins.FirstOrDefault(p => p.Name == pinName);
+            if (pin == null)
+            {
+                RaiseError($"Output pin '{pinName}' not found");
+                return false;
+            }
+
+            return pin.State;
+        }
+
+        /// <summary>
+        /// Gets the current state of an output pin by pin number
+        /// </summary>
+        /// <param name="pinNumber">The number of the output pin</param>
+        /// <returns>True if the pin is active, false otherwise</returns>
+        public bool GetOutput(int pinNumber)
+        {
+            if (pinNumber < 0 || pinNumber >= OutputPins.Count)
+            {
+                RaiseError($"Output pin number {pinNumber} is out of range");
+                return false;
+            }
+
+            return OutputPins[pinNumber].State;
+        }
+
         public void Dispose()
         {
             cancellationTokenSource.Cancel();
