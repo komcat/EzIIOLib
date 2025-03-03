@@ -1,4 +1,5 @@
-﻿using System;
+﻿using Newtonsoft.Json;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
@@ -20,8 +21,31 @@ namespace EzIIOLib
             this.deviceManager = deviceManager ?? throw new ArgumentNullException(nameof(deviceManager));
         }
 
+
+        private IOConfiguration LoadIOConfigurationFromJson()
+        {
+            string configPath = Path.Combine(
+                AppDomain.CurrentDomain.BaseDirectory,
+                "Config",
+                "IOConfig.json"
+            );
+
+            if (!File.Exists(configPath))
+                throw new FileNotFoundException($"Configuration file not found: {configPath}");
+
+            string jsonContent = File.ReadAllText(configPath);
+            return JsonConvert.DeserializeObject<IOConfiguration>(jsonContent);
+        }
+
+        public void InitSlides()
+        {
+            var config = LoadIOConfigurationFromJson();
+            LoadSlidesFromConfig(config);
+        }
+
         public void LoadSlidesFromConfig(IOConfiguration config)
         {
+            
             foreach (var slideConfig in config.PneumaticSlides)
             {
                 AddSlide(slideConfig);
